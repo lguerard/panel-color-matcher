@@ -75,12 +75,15 @@ export default class PanelColorMatcher extends Extension {
         return new Gio.Settings({schema_id: DASH_SCHEMA});
     }
 
-    async _sampleColor(x, y) {
+    async _captureStage() {
         // XXX: global.stage.read_pixels would be more appropriate.
         // https://gitlab.gnome.org/GNOME/mutter/-/issues/3622
         const screenshot = new Shell.Screenshot();
         const [content, scale] = await screenshot.screenshot_stage_to_content();
-        const texture = content.get_texture();
+        return {texture: content.get_texture(), scale};
+    }
+
+    async _sampleColor(texture, scale, x, y) {
         const stream = Gio.MemoryOutputStream.new_resizable();
         const pixbuf = await Shell.Screenshot.composite_to_stream(
             texture,
@@ -164,10 +167,10 @@ export default class PanelColorMatcher extends Extension {
             return;
         }
 
-        Promise.all([
-            this._sampleColor(x1, y),
-            this._sampleColor(x2, y),
-        ]).then(([color1, color2]) => {
+        this._captureStage().then(({texture, scale}) => Promise.all([
+            this._sampleColor(texture, scale, x1, y),
+            this._sampleColor(texture, scale, x2, y),
+        ])).then(([color1, color2]) => {
             // In case one window is half-maximized either on the left or the
             // right side, find the side where the color is lightest or darkest,
             // since windows tend to be either light or dark and wallpapers
