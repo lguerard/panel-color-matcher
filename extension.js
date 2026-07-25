@@ -14,6 +14,9 @@ import {Extension} from "resource:///org/gnome/shell/extensions/extension.js";
 // non-theme dash background color.
 const DASH_SCHEMA = "org.gnome.shell.extensions.dash-to-dock";
 
+// Fallback poll interval in milliseconds, see _syncPoll().
+const POLL_INTERVAL = 3000;
+
 // https://github.com/GNOME/gnome-shell/blob/main/data/theme/gnome-shell-sass/widgets/_panel.scss
 const PANEL_CSS = (bg, fg) => `
 #panel { background-color: ${bg ?? "transparent"}; }
@@ -41,12 +44,17 @@ export default class PanelColorMatcher extends Extension {
             this);
 
         this._settings = this.getSettings();
+        this._settings.connectObject(
+            "changed::poll-fallback-enabled", () => this._syncPoll(),
+            this);
         this._dashSettings = this._getDashSettings();
         this._dashColor = null;
         this._stylesheet = null;
         this._stylesheetText = null;
         this._updateTimeout = null;
+        this._pollTimeout = null;
         this._update();
+        this._syncPoll();
     }
 
     disable() {
@@ -55,6 +63,10 @@ export default class PanelColorMatcher extends Extension {
         if (this._updateTimeout) {
             GLib.source_remove(this._updateTimeout);
             this._updateTimeout = null;
+        }
+        if (this._pollTimeout) {
+            GLib.source_remove(this._pollTimeout);
+            this._pollTimeout = null;
         }
         if (this._stylesheet) {
             this._unloadStyle();
@@ -66,6 +78,7 @@ export default class PanelColorMatcher extends Extension {
             this._dashSettings.set_boolean("custom-background-color", false);
             this._dashSettings = null;
         }
+        this._settings.disconnectObject(this);
         this._settings = null;
     }
 
@@ -73,6 +86,23 @@ export default class PanelColorMatcher extends Extension {
         const source = Gio.SettingsSchemaSource.get_default();
         if (!source.lookup(DASH_SCHEMA, true)) return null;
         return new Gio.Settings({schema_id: DASH_SCHEMA});
+    }
+
+    // Fallback for content-only changes that don't fire any of the
+    // window-manager signals connected in enable(), e.g. a web page
+    // finishing loading in an already-focused, unresized browser window.
+    // Optional since it wakes the system periodically, costing battery.
+    _syncPoll() {
+        const enabled = this._settings.get_boolean("poll-fallback-enabled");
+        if (enabled && !this._pollTimeout) {
+            this._pollTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, POLL_INTERVAL, () => {
+                this._update();
+                return GLib.SOURCE_CONTINUE;
+            });
+        } else if (!enabled && this._pollTimeout) {
+            GLib.source_remove(this._pollTimeout);
+            this._pollTimeout = null;
+        }
     }
 
     async _captureStage() {

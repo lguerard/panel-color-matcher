@@ -29,6 +29,13 @@ export default class PanelColorMatcherPreferences extends ExtensionPreferences {
         });
         settings.bind("update-delay", row, "value", Gio.SettingsBindFlags.DEFAULT);
         group.add(row);
+
+        const pollRow = new Adw.SwitchRow({
+            title: "Periodic refresh fallback",
+            subtitle: "Re-check the color every few seconds to catch changes that don't trigger a window event, e.g. a web page finishing loading. Uses a little extra battery.",
+        });
+        settings.bind("poll-fallback-enabled", pollRow, "active", Gio.SettingsBindFlags.DEFAULT);
+        group.add(pollRow);
     }
 
 }
