@@ -7,7 +7,7 @@ implementation is in file `extension.js`.
 
 ## General Instructions
 
-* We're targeting GNOME 49 and later
+* We're targeting GNOME 46 and later
 * We're targeting Wayland only
 
 ## JavaScript
