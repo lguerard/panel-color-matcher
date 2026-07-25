@@ -10,6 +10,10 @@ import St from "gi://St";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import {Extension} from "resource:///org/gnome/shell/extensions/extension.js";
 
+// Dash to Dock and its Ubuntu fork both use this schema for a custom,
+// non-theme dash background color.
+const DASH_SCHEMA = "org.gnome.shell.extensions.dash-to-dock";
+
 // https://github.com/GNOME/gnome-shell/blob/main/data/theme/gnome-shell-sass/widgets/_panel.scss
 const PANEL_CSS = (bg, fg) => `
 #panel { background-color: ${bg ?? "transparent"}; }
@@ -37,6 +41,8 @@ export default class PanelColorMatcher extends Extension {
             this);
 
         this._settings = this.getSettings();
+        this._dashSettings = this._getDashSettings();
+        this._dashColor = null;
         this._stylesheet = null;
         this._stylesheetText = null;
         this._updateTimeout = null;
@@ -56,7 +62,17 @@ export default class PanelColorMatcher extends Extension {
             this._stylesheet = null;
             this._stylesheetText = null;
         }
+        if (this._dashSettings) {
+            this._dashSettings.set_boolean("custom-background-color", false);
+            this._dashSettings = null;
+        }
         this._settings = null;
+    }
+
+    _getDashSettings() {
+        const source = Gio.SettingsSchemaSource.get_default();
+        if (!source.lookup(DASH_SCHEMA, true)) return null;
+        return new Gio.Settings({schema_id: DASH_SCHEMA});
     }
 
     async _sampleColor(x, y) {
@@ -108,6 +124,20 @@ export default class PanelColorMatcher extends Extension {
         this._stylesheet && theme.unload_stylesheet(this._stylesheet);
     }
 
+    _updateDash(color) {
+        if (!this._dashSettings) return;
+        const hex = color && `#${[color.r, color.g, color.b]
+            .map(c => c.toString(16).padStart(2, "0")).join("")}`;
+        if (hex === this._dashColor) return;
+        this._dashColor = hex;
+        if (!hex) {
+            this._dashSettings.set_boolean("custom-background-color", false);
+            return;
+        }
+        this._dashSettings.set_string("background-color", hex);
+        this._dashSettings.set_boolean("custom-background-color", true);
+    }
+
     _hasWindowAt(x, y) {
         const workspace = global.workspace_manager.get_active_workspace();
         return global.display.get_tab_list(Meta.TabList.NORMAL, workspace).some(win => {
@@ -130,6 +160,7 @@ export default class PanelColorMatcher extends Extension {
         // rather than matching the wallpaper.
         if (!this._hasWindowAt(x1, y) && !this._hasWindowAt(x2, y)) {
             this._applyStyle(null, null);
+            this._updateDash(null);
             return;
         }
 
@@ -150,6 +181,7 @@ export default class PanelColorMatcher extends Extension {
             const bg = `rgb(${color.r}, ${color.g}, ${color.b})`;
             const fg = luminance > 128 ? "rgba(0, 0, 0, 0.9)" : "rgba(255, 255, 255, 0.9)";
             this._applyStyle(bg, fg);
+            this._updateDash(color);
         }).catch(e => {
             console.error("Color sampling failed:", e);
         });
