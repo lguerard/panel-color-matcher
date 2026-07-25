@@ -3,6 +3,7 @@
 
 import Gio from "gi://Gio";
 import GLib from "gi://GLib";
+import Meta from "gi://Meta";
 import Shell from "gi://Shell";
 import St from "gi://St";
 
@@ -11,9 +12,8 @@ import {Extension} from "resource:///org/gnome/shell/extensions/extension.js";
 
 // https://github.com/GNOME/gnome-shell/blob/main/data/theme/gnome-shell-sass/widgets/_panel.scss
 const PANEL_CSS = (bg, fg) => `
-#panel { background-color: ${bg}; }
-#panel * { color: ${fg}; }
-#panel .workspace-dot { background-color: ${fg}; }
+#panel { background-color: ${bg ?? "transparent"}; }
+${bg ? `#panel * { color: ${fg}; }\n#panel .workspace-dot { background-color: ${fg}; }` : ""}
 #panel:overview { background-color: transparent; }
 #panel:overview * { color: white; }
 #panel:overview .workspace-dot { background-color: white; }
@@ -108,6 +108,16 @@ export default class PanelColorMatcher extends Extension {
         this._stylesheet && theme.unload_stylesheet(this._stylesheet);
     }
 
+    _hasWindowAt(x, y) {
+        const workspace = global.workspace_manager.get_active_workspace();
+        return global.display.get_tab_list(Meta.TabList.NORMAL, workspace).some(win => {
+            if (win.minimized) return false;
+            const rect = win.get_frame_rect();
+            return x >= rect.x && x < rect.x + rect.width &&
+                   y >= rect.y && y < rect.y + rect.height;
+        });
+    }
+
     _update() {
         const index = global.display.get_primary_monitor();
         const monitor = global.display.get_monitor_geometry(index);
@@ -115,6 +125,14 @@ export default class PanelColorMatcher extends Extension {
         const x1 = monitor.x + Math.floor(monitor.width * 0.25);
         const x2 = monitor.x + Math.floor(monitor.width * 0.75);
         const y  = monitor.y + Main.panel.height + 3;
+
+        // No window below the panel, e.g. empty desktop: stay transparent
+        // rather than matching the wallpaper.
+        if (!this._hasWindowAt(x1, y) && !this._hasWindowAt(x2, y)) {
+            this._applyStyle(null, null);
+            return;
+        }
+
         Promise.all([
             this._sampleColor(x1, y),
             this._sampleColor(x2, y),
