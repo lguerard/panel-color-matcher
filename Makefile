@@ -11,9 +11,10 @@ clean:
 	rm -f $(PACK_FILE)
 
 install:
-	mkdir -p $(INSTALL_DIR)
-	cp -f extension.js $(INSTALL_DIR)
-	cp -f metadata.json $(INSTALL_DIR)
+	mkdir -p $(INSTALL_DIR)/schemas
+	cp -f extension.js prefs.js metadata.json $(INSTALL_DIR)
+	cp -f schemas/*.gschema.xml $(INSTALL_DIR)/schemas
+	glib-compile-schemas $(INSTALL_DIR)/schemas
 
 pack: check clean
 	gnome-extensions pack

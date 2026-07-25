@@ -36,6 +36,7 @@ export default class PanelColorMatcher extends Extension {
             "unminimize",       () => this._updateDelayed(),
             this);
 
+        this._settings = this.getSettings();
         this._stylesheet = null;
         this._stylesheetText = null;
         this._updateTimeout = null;
@@ -55,6 +56,7 @@ export default class PanelColorMatcher extends Extension {
             this._stylesheet = null;
             this._stylesheetText = null;
         }
+        this._settings = null;
     }
 
     async _sampleColor(x, y) {
@@ -137,7 +139,8 @@ export default class PanelColorMatcher extends Extension {
 
     _updateDelayed() {
         this._updateTimeout && GLib.source_remove(this._updateTimeout);
-        this._updateTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+        const delay = this._settings.get_int("update-delay");
+        this._updateTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             this._update();
             this._updateTimeout = null;
             return GLib.SOURCE_REMOVE;

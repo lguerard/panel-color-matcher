@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.panel-color-matcher"
+          path="/org/gnome/shell/extensions/panel-color-matcher/">
+    <key name="update-delay" type="i">
+      <default>500</default>
+      <range min="0" max="2000"/>
+      <summary>Update delay</summary>
+      <description>
+        Delay in milliseconds after a triggering event (focus change,
+        resize, workspace switch) before sampling the color and updating
+        the panel. Lower values react faster but risk sampling colors
+        before window animations have finished and increase CPU usage.
+      </description>
+    </key>
+  </schema>
+</schemalist>
