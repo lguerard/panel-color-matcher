@@ -33,21 +33,24 @@ Extensions app or Extension Manager.
 `make check` lints the code and needs [JSHint](https://jshint.com/)
 (`npm install -g jshint`).
 
-## Known Issues
+## How It Works
 
-This extension uses GNOME's color picker on single pixels to sample
-colors right below the panel. When that color is different than before,
-it is set directly on the panel, without reloading the shell theme. This
-works, but has some minor problems.
+GNOME only repaints the parts of the screen that change. The extension
+watches for repaints of the two points right below the panel that it
+samples, at 25% and 75% of the width, whatever caused them: a window
+being opened, moved or closed, switching tabs in a browser, a page
+loading, and so on. Once those points have stayed unchanged for 100 ms,
+or at the latest after 500 ms of continuous changes such as video, it
+reads the two pixels with GNOME's color picker and sets the color
+directly on the panel, without reloading the shell theme. When nothing
+below the panel changes, the extension does nothing.
+
+## Known Issues
 
 * Dash to Dock restyles itself whenever its background color changes.
   Some Dash to Dock versions "tremble" and sometimes swap the order of
   non-pinned open apps in the dock when restyling. This is a bug in Dash
   to Dock, see micheleg/dash-to-dock#2383 for a description and a fix.
-
-* Sampling repaints two pixels of the screen on every window event. This
-  is cheap, but if you have a very low-power system, keep the periodic
-  refresh fallback disabled.
 
 ## Screenshots
 

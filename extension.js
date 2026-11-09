@@ -4,7 +4,6 @@ import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 import Meta from "gi://Meta";
 import Shell from "gi://Shell";
-import St from "gi://St";
 
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import {Extension} from "resource:///org/gnome/shell/extensions/extension.js";
@@ -43,8 +42,16 @@ const ACCENT_MIN_CHROMA = 48;
 
 const INTERFACE_SCHEMA = "org.gnome.desktop.interface";
 
-// Fallback poll interval in milliseconds, see _syncPoll().
-const POLL_INTERVAL = 3000;
+// When the stage below the panel is repainted, wait until it has stayed
+// unchanged for SETTLE_TIME milliseconds before sampling, so that window
+// animations and apps drawing in several steps settle first. During
+// continuous changes, e.g. scrolling or video, sample anyway after at most
+// MAX_WAIT milliseconds.
+const SETTLE_TIME = 100;
+const MAX_WAIT = 500;
+
+// Distance in pixels below the panel of the sampled points.
+const SAMPLE_OFFSET = 3;
 
 // Style classes defined in stylesheet.css.
 const CLASS_TRANSPARENT = "panel-color-matcher-transparent";
@@ -107,68 +114,39 @@ export default class PanelColorMatcher extends Extension {
         this._accentOriginal = null;
         this._accentColor = null;
         this._accentTimeout = null;
-        // Undefined until the first update, then null for transparent.
+        // Undefined until the first sample, then null for transparent.
         this._panelColor = undefined;
         this._panelStyle = Main.panel.get_style();
         this._inOverview = Main.overview.visible;
-        this._updateTimeout = null;
-        this._pollTimeout = null;
-        this._laterId = null;
-        this._idleId = null;
-        // Window actors with a window manager animation in progress, mapped
-        // to a timeout to stop waiting for it, see _waitForEffect().
-        this._animating = new Map();
-        // The focused window, watched for title changes, and its actor,
-        // briefly watched for redraws after one, see _onTitleChanged().
-        this._focusWindow = null;
-        this._damagedActor = null;
-        this._damagedId = null;
-        this._damagedTimeout = null;
-        // Incremented by each capture and by disable(), so that a capture
+        // Stage coordinates of the sampled points, see _syncPoints().
+        this._points = null;
+        // Monotonic times in microseconds of the first and the latest
+        // unsampled change below the panel, see _queueSample().
+        this._firstChange = null;
+        this._lastChange = null;
+        this._sampleTimeout = null;
+        // Incremented by each sample and by disable(), so that a sample
         // finishing late can tell it has been superseded.
         this._serial = 0;
-        this._capturing = false;
-        this._capturePending = false;
-
-        // Events that change what's below the panel right away, without an
-        // animation: sample on the next frame.
-        // https://mutter.gnome.org/meta/class.Display.html#signals
-        global.display.connectObject(
-            "focus-window", () => {
-                this._watchFocusWindow();
-                this._updateNow();
-            },
-            "grab-op-end",  () => this._updateNow(),
-            this);
-
-        // Events that start a window animation: sample as soon as the
-        // animation is complete. The workspace switch animation gives no
-        // signal when complete, so rely on the delayed update for it.
-        // https://github.com/GNOME/gnome-shell/blob/main/js/ui/windowManager.js
-        global.window_manager.connectObject(
-            "destroy",          (wm, actor) => this._waitForEffect(actor, "destroy"),
-            "map",              (wm, actor) => this._waitForEffect(actor, "effects-completed"),
-            "minimize",         (wm, actor) => this._waitForEffect(actor, "effects-completed"),
-            "size-change",      (wm, actor) => this._waitForEffect(actor, "effects-completed"),
-            "size-changed",     () => this._updateNow(),
-            "switch-workspace", () => this._updateDelayed(),
-            "unminimize",       (wm, actor) => this._waitForEffect(actor, "effects-completed"),
-            this);
+        this._sampling = false;
+        this._samplePending = false;
 
         // The overview makes the panel transparent, which our inline
         // background color would override, so step aside while it's shown.
         Main.overview.connectObject(
             "showing", () => this._setInOverview(true),
             "hiding",  () => this._setInOverview(false),
-            "hidden",  () => this._updateNow(),
             this);
 
         Main.layoutManager.connectObject(
-            "monitors-changed", () => this._updateDelayed(),
+            "monitors-changed", () => this._syncPoints(),
+            this);
+
+        Main.panel.connectObject(
+            "notify::height", () => this._syncPoints(),
             this);
 
         this._settings.connectObject(
-            "changed::poll-fallback-enabled", () => this._syncPoll(),
             "changed::accent-color-enabled", () => this._updateAccentDelayed(),
             this);
 
@@ -182,35 +160,35 @@ export default class PanelColorMatcher extends Extension {
             },
             this);
 
+        // Rather than guessing from window manager events when what's below
+        // the panel might have changed, which misses e.g. switching tabs in
+        // a browser, watch the stage being repainted there. Whatever the
+        // cause, a change on screen is a repaint, and with nothing changing
+        // there are no repaints, so this costs nothing when idle.
+        global.stage.connectObject(
+            "paint-view", (stage, view, clip) => this._onPaintView(clip),
+            this);
+
         // During shell startup the panel isn't laid out yet and the stage
-        // can't be captured, so wait until startup is complete.
+        // can't be sampled, so wait until startup is complete.
         if (Main.layoutManager._startingUp) {
             Main.layoutManager.connectObject(
-                "startup-complete", () => this._update(),
+                "startup-complete", () => this._syncPoints(),
                 this);
         } else {
-            this._update();
+            this._syncPoints();
         }
-        this._syncPoll();
-        this._watchFocusWindow();
     }
 
     disable() {
         this._serial++;
-        global.display.disconnectObject(this);
-        global.window_manager.disconnectObject(this);
+        global.stage.disconnectObject(this);
         Main.overview.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
+        Main.panel.disconnectObject(this);
         this._settings.disconnectObject(this);
         this._interfaceSettings?.disconnectObject(this);
-        this._unwatchFocusWindow();
-        for (const actor of [...this._animating.keys()])
-            this._stopWaitingForEffect(actor, false);
-        if (this._laterId) {
-            global.compositor.get_laters().remove(this._laterId);
-            this._laterId = null;
-        }
-        for (const name of ["_updateTimeout", "_pollTimeout", "_dashTimeout", "_accentTimeout", "_idleId"]) {
+        for (const name of ["_sampleTimeout", "_dashTimeout", "_accentTimeout"]) {
             if (this[name]) {
                 GLib.source_remove(this[name]);
                 this[name] = null;
@@ -222,6 +200,7 @@ export default class PanelColorMatcher extends Extension {
         Main.panel.set_style(this._panelStyle);
         this._panelStyle = null;
         this._panelColor = undefined;
+        this._points = null;
         if (this._dashSettings) {
             this._writeDash(null);
             this._dashSettings = null;
@@ -245,29 +224,58 @@ export default class PanelColorMatcher extends Extension {
         return settings.settings_schema.has_key("accent-color") ? settings : null;
     }
 
-    // Fallback for content-only changes that don't fire any of the
-    // window-manager signals connected in enable(), e.g. a web page
-    // finishing loading in an already-focused, unresized browser window.
-    // Optional since it wakes the system periodically, costing battery.
-    _syncPoll() {
-        const enabled = this._settings.get_boolean("poll-fallback-enabled");
-        if (enabled && !this._pollTimeout) {
-            this._pollTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, POLL_INTERVAL, () => {
-                // A delayed update is coming anyway.
-                if (!this._updateTimeout) this._update();
-                return GLib.SOURCE_CONTINUE;
-            });
-        } else if (!enabled && this._pollTimeout) {
-            GLib.source_remove(this._pollTimeout);
-            this._pollTimeout = null;
-        }
+    // Sample at 25% and 75% of the primary monitor's width, right below the
+    // panel, to detect half-maximized windows.
+    _syncPoints() {
+        const index = global.display.get_primary_monitor();
+        const monitor = global.display.get_monitor_geometry(index);
+        const y = monitor.y + Main.panel.height + SAMPLE_OFFSET;
+        this._points = [
+            [monitor.x + Math.floor(monitor.width * 0.25), y],
+            [monitor.x + Math.floor(monitor.width * 0.75), y],
+        ];
+        this._queueSample();
+    }
+
+    // Called for every repaint of every monitor, so keep this cheap. clip is
+    // the repainted region of the stage, in stage coordinates.
+    _onPaintView(clip) {
+        if (!this._points || this._inOverview) return;
+        if (clip && !this._points.some(([x, y]) => clip.contains_point(x, y))) return;
+        this._queueSample();
+    }
+
+    _queueSample() {
+        const now = GLib.get_monotonic_time();
+        if (this._firstChange === null) this._firstChange = now;
+        this._lastChange = now;
+        if (!this._sampleTimeout) this._scheduleSample(SETTLE_TIME);
+    }
+
+    // Rather than rescheduling on every repaint, check when the timeout
+    // fires whether to wait more.
+    _scheduleSample(delay) {
+        this._sampleTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._sampleTimeout = null;
+            const now = GLib.get_monotonic_time();
+            const settleLeft = SETTLE_TIME - (now - this._lastChange) / 1000;
+            const waitLeft = MAX_WAIT - (now - this._firstChange) / 1000;
+            if (settleLeft > 0 && waitLeft > 0) {
+                this._scheduleSample(Math.ceil(Math.min(settleLeft, waitLeft)));
+            } else {
+                this._firstChange = null;
+                this._sample();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // Paints just the one pixel at x, y of the stage to a buffer and reads
     // it back, with no full-stage capture, no wait for the next frame and no
-    // image encoding. This is what GNOME's own color picker uses.
+    // image encoding. This is what GNOME's own color picker uses. It paints
+    // offscreen, so it doesn't emit paint-view, which would loop.
     // https://github.com/GNOME/gnome-shell/blob/main/src/shell-screenshot.c
-    async _sampleColor(x, y) {
+    async _pickColor(x, y) {
         // Each pick stores its result in the screenshot object,
         // so use a new one for every pick.
         const screenshot = new Shell.Screenshot();
@@ -275,100 +283,55 @@ export default class PanelColorMatcher extends Extension {
         return {r: color.red, g: color.green, b: color.blue};
     }
 
-    // Sample once the window manager animation of actor is complete,
-    // signalled by signal on actor. The delayed update covers any missed
-    // signal, e.g. when GNOME Shell decides not to animate a window.
-    _waitForEffect(actor, signal) {
-        this._updateDelayed();
-        if (!St.Settings.get().enable_animations || Main.overview.visible) {
-            this._updateNow();
+    _hasWindowAt(x, y) {
+        const workspace = global.workspace_manager.get_active_workspace();
+        return global.display.get_tab_list(Meta.TabList.NORMAL, workspace).some(win => {
+            if (win.minimized) return false;
+            const rect = win.get_frame_rect();
+            return x >= rect.x && x < rect.x + rect.width &&
+                   y >= rect.y && y < rect.y + rect.height;
+        });
+    }
+
+    _sample() {
+        if (!this._points || this._inOverview) return;
+        // Avoid overlapping samples, but sample again once the one in
+        // progress is done, since it might be outdated already.
+        if (this._sampling) {
+            this._samplePending = true;
             return;
         }
-        if (this._animating.has(actor)) return;
-        const delay = this._settings.get_int("update-delay");
-        const timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-            this._animating.delete(actor);
-            this._stopWaitingForEffect(actor, true);
-            return GLib.SOURCE_REMOVE;
-        });
-        this._animating.set(actor, timeout);
-        actor.connectObject(signal, () => this._stopWaitingForEffect(actor, true), this);
-    }
 
-    _stopWaitingForEffect(actor, update) {
-        const timeout = this._animating.get(actor);
-        timeout && GLib.source_remove(timeout);
-        this._animating.delete(actor);
-        actor.disconnectObject(this);
-        if (update && this._animating.size === 0) this._updateNow();
-    }
-
-    // Switching tabs in a browser or editor changes neither focus nor
-    // geometry, so no window manager signal fires. It does change the
-    // window title though, and so does e.g. a web page finishing loading.
-    _watchFocusWindow() {
-        this._unwatchFocusWindow();
-        this._focusWindow = global.display.focus_window;
-        this._focusWindow?.connectObject(
-            "notify::title", () => this._onTitleChanged(),
-            "unmanaged",     () => this._unwatchFocusWindow(),
-            this);
-    }
-
-    _unwatchFocusWindow() {
-        this._unwatchDamage();
-        this._focusWindow?.disconnectObject(this);
-        this._focusWindow = null;
-    }
-
-    // The app can draw the new content after changing the title, so
-    // besides sampling right away, sample after each redraw of the window
-    // for a moment.
-    _onTitleChanged() {
-        this._updateNow();
-        this._updateDelayed();
-        const actor = this._focusWindow?.get_compositor_private();
-        if (!actor) return;
-        if (actor !== this._damagedActor) {
-            this._unwatchDamage();
-            this._damagedActor = actor;
-            this._damagedId = actor.connect("damaged", () => this._updateNow());
+        // No window below the panel, e.g. empty desktop: stay transparent
+        // rather than matching the wallpaper.
+        if (!this._points.some(([x, y]) => this._hasWindowAt(x, y))) {
+            this._applyColor(null);
+            return;
         }
-        this._damagedTimeout && GLib.source_remove(this._damagedTimeout);
-        const delay = this._settings.get_int("update-delay");
-        this._damagedTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-            this._damagedTimeout = null;
-            this._unwatchDamage();
-            return GLib.SOURCE_REMOVE;
-        });
-    }
 
-    _unwatchDamage() {
-        if (this._damagedTimeout) {
-            GLib.source_remove(this._damagedTimeout);
-            this._damagedTimeout = null;
-        }
-        if (this._damagedActor) {
-            this._damagedActor.disconnect(this._damagedId);
-            this._damagedActor = null;
-            this._damagedId = null;
-        }
-    }
-
-    // Sample right after the next frame, once the window stacking, focus
-    // and geometry changes from the current event are reflected on stage.
-    // Skipped while animations are running, those trigger an update on
-    // completion.
-    _updateNow() {
-        if (this._laterId || this._idleId) return;
-        this._laterId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
-            this._laterId = null;
-            this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-                this._idleId = null;
-                if (this._animating.size === 0) this._update();
-                return GLib.SOURCE_REMOVE;
-            });
-            return GLib.SOURCE_REMOVE;
+        const serial = ++this._serial;
+        this._sampling = true;
+        Promise.all(this._points.map(([x, y]) => this._pickColor(x, y))).then(([color1, color2]) => {
+            // Disabled or superseded while sampling.
+            if (serial !== this._serial) return;
+            // In case one window is half-maximized either on the left or the
+            // right side, find the side where the color is lightest or darkest,
+            // since windows tend to be either light or dark and wallpapers
+            // between. Also, note the chosen midpoint, which controls what
+            // happens when one light window and one dark window are
+            // half-maximized. Raising that value above 128 favors dark.
+            const dist1 = Math.abs(color1.r-155) + Math.abs(color1.g-155) + Math.abs(color1.b-155);
+            const dist2 = Math.abs(color2.r-155) + Math.abs(color2.g-155) + Math.abs(color2.b-155);
+            this._applyColor(dist1 > dist2 ? color1 : color2);
+        }).catch(e => {
+            console.error("Color sampling failed:", e);
+        }).finally(() => {
+            if (serial !== this._serial) return;
+            this._sampling = false;
+            if (this._samplePending) {
+                this._samplePending = false;
+                this._sample();
+            }
         });
     }
 
@@ -458,79 +421,6 @@ export default class PanelColorMatcher extends Extension {
         settings.apply();
         this._dashColor = hex;
         if (!hex) this._dashOriginal = null;
-    }
-
-    _hasWindowAt(x, y) {
-        const workspace = global.workspace_manager.get_active_workspace();
-        return global.display.get_tab_list(Meta.TabList.NORMAL, workspace).some(win => {
-            if (win.minimized) return false;
-            const rect = win.get_frame_rect();
-            return x >= rect.x && x < rect.x + rect.width &&
-                   y >= rect.y && y < rect.y + rect.height;
-        });
-    }
-
-    _update() {
-        // The overview hides the windows, sample again once it's hidden.
-        if (this._inOverview) return;
-        // Avoid stacking up captures, but make sure to sample again once
-        // the one in progress is done, since it might be outdated already.
-        if (this._capturing) {
-            this._capturePending = true;
-            return;
-        }
-
-        const index = global.display.get_primary_monitor();
-        const monitor = global.display.get_monitor_geometry(index);
-        // Sample at 25% and 75% to detect half-maximized windows.
-        const x1 = monitor.x + Math.floor(monitor.width * 0.25);
-        const x2 = monitor.x + Math.floor(monitor.width * 0.75);
-        const y  = monitor.y + Main.panel.height + 3;
-
-        // No window below the panel, e.g. empty desktop: stay transparent
-        // rather than matching the wallpaper.
-        if (!this._hasWindowAt(x1, y) && !this._hasWindowAt(x2, y)) {
-            this._applyColor(null);
-            return;
-        }
-
-        const serial = ++this._serial;
-        this._capturing = true;
-        Promise.all([
-            this._sampleColor(x1, y),
-            this._sampleColor(x2, y),
-        ]).then(([color1, color2]) => {
-            // Disabled or superseded while capturing.
-            if (serial !== this._serial) return;
-            // In case one window is half-maximized either on the left or the
-            // right side, find the side where the color is lightest or darkest,
-            // since windows tend to be either light or dark and wallpapers
-            // between. Also, note the chosen midpoint, which controls what
-            // happens when one light window and one dark window are
-            // half-maximized. Raising that value above 128 favors dark.
-            const dist1 = Math.abs(color1.r-155) + Math.abs(color1.g-155) + Math.abs(color1.b-155);
-            const dist2 = Math.abs(color2.r-155) + Math.abs(color2.g-155) + Math.abs(color2.b-155);
-            this._applyColor(dist1 > dist2 ? color1 : color2);
-        }).catch(e => {
-            console.error("Color sampling failed:", e);
-        }).finally(() => {
-            if (serial !== this._serial) return;
-            this._capturing = false;
-            if (this._capturePending) {
-                this._capturePending = false;
-                this._update();
-            }
-        });
-    }
-
-    _updateDelayed() {
-        this._updateTimeout && GLib.source_remove(this._updateTimeout);
-        const delay = this._settings.get_int("update-delay");
-        this._updateTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-            this._updateTimeout = null;
-            this._update();
-            return GLib.SOURCE_REMOVE;
-        });
     }
 
 }
