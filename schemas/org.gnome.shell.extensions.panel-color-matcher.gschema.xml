@@ -14,7 +14,7 @@
       </description>
     </key>
     <key name="poll-fallback-enabled" type="b">
-      <default>true</default>
+      <default>false</default>
       <summary>Periodic fallback refresh</summary>
       <description>
         Periodically re-check the color even without a triggering window
