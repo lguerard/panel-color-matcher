@@ -2,8 +2,8 @@ AGENTS.md
 =========
 
 Panel Color Matcher is a GNOME Shell extension to dynamically change the
-top panel color to match the wallpaper or a maximized window. The main
-implementation is in file `extension.js`.
+top panel color to match the window below it. The main implementation
+is in file `extension.js`, with static styles in `stylesheet.css`.
 
 ## General Instructions
 

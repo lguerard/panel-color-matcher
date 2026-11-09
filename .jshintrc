@@ -1,6 +1,7 @@
 {
   "eqeqeq": true,
   "esversion": 11,
+  "globals": {"global": false},
   "expr": true,
   "node": true,
   "shadow": true,
