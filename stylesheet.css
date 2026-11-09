@@ -1,0 +1,30 @@
+/*
+ * Panel Color Matcher
+ *
+ * These rules are loaded once with the extension and toggled by adding or
+ * removing style classes on #panel. The background color itself is set as an
+ * inline style on the panel. Changing the panel color therefore only restyles
+ * the panel, instead of reloading the whole shell theme.
+ *
+ * https://github.com/GNOME/gnome-shell/blob/main/data/theme/gnome-shell-sass/widgets/_panel.scss
+ */
+
+#panel.panel-color-matcher-transparent {
+    background-color: transparent;
+}
+
+#panel.panel-color-matcher-dark-text * {
+    color: rgba(0, 0, 0, 0.9);
+}
+
+#panel.panel-color-matcher-dark-text .workspace-dot {
+    background-color: rgba(0, 0, 0, 0.9);
+}
+
+#panel.panel-color-matcher-light-text * {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+#panel.panel-color-matcher-light-text .workspace-dot {
+    background-color: rgba(255, 255, 255, 0.9);
+}

@@ -12,7 +12,7 @@ clean:
 
 install:
 	mkdir -p $(INSTALL_DIR)/schemas
-	cp -f extension.js prefs.js metadata.json $(INSTALL_DIR)
+	cp -f extension.js prefs.js metadata.json stylesheet.css $(INSTALL_DIR)
 	cp -f schemas/*.gschema.xml $(INSTALL_DIR)/schemas
 	glib-compile-schemas $(INSTALL_DIR)/schemas
 
