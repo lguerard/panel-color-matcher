@@ -23,5 +23,14 @@
         system every few seconds, which costs some battery life.
       </description>
     </key>
+    <key name="accent-color-enabled" type="b">
+      <default>false</default>
+      <summary>Match accent color</summary>
+      <description>
+        Also set the system accent color (GNOME 47 and later) to the preset
+        closest in hue to the panel color. Gray colors keep your own accent
+        color, which is restored when the extension is disabled.
+      </description>
+    </key>
   </schema>
 </schemalist>
