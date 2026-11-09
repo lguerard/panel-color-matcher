@@ -4,6 +4,7 @@ import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 import Meta from "gi://Meta";
 import Shell from "gi://Shell";
+import St from "gi://St";
 
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import {Extension} from "resource:///org/gnome/shell/extensions/extension.js";
@@ -112,26 +113,37 @@ export default class PanelColorMatcher extends Extension {
         this._inOverview = Main.overview.visible;
         this._updateTimeout = null;
         this._pollTimeout = null;
+        this._laterId = null;
+        this._idleId = null;
+        // Window actors with a window manager animation in progress, mapped
+        // to a timeout to stop waiting for it, see _waitForEffect().
+        this._animating = new Map();
         // Incremented by each capture and by disable(), so that a capture
         // finishing late can tell it has been superseded.
         this._serial = 0;
         this._capturing = false;
         this._capturePending = false;
 
+        // Events that change what's below the panel right away, without an
+        // animation: sample on the next frame.
         // https://mutter.gnome.org/meta/class.Display.html#signals
         global.display.connectObject(
-            "focus-window", () => this._updateDelayed(),
-            "grab-op-end",  () => this._updateDelayed(),
+            "focus-window", () => this._updateNow(),
+            "grab-op-end",  () => this._updateNow(),
             this);
 
+        // Events that start a window animation: sample as soon as the
+        // animation is complete. The workspace switch animation gives no
+        // signal when complete, so rely on the delayed update for it.
         // https://github.com/GNOME/gnome-shell/blob/main/js/ui/windowManager.js
         global.window_manager.connectObject(
-            "destroy",          () => this._updateDelayed(),
-            "map",              () => this._updateDelayed(),
-            "minimize",         () => this._updateDelayed(),
-            "size-changed",     () => this._updateDelayed(),
+            "destroy",          (wm, actor) => this._waitForEffect(actor, "destroy"),
+            "map",              (wm, actor) => this._waitForEffect(actor, "effects-completed"),
+            "minimize",         (wm, actor) => this._waitForEffect(actor, "effects-completed"),
+            "size-change",      (wm, actor) => this._waitForEffect(actor, "effects-completed"),
+            "size-changed",     () => this._updateNow(),
             "switch-workspace", () => this._updateDelayed(),
-            "unminimize",       () => this._updateDelayed(),
+            "unminimize",       (wm, actor) => this._waitForEffect(actor, "effects-completed"),
             this);
 
         // The overview makes the panel transparent, which our inline
@@ -139,7 +151,7 @@ export default class PanelColorMatcher extends Extension {
         Main.overview.connectObject(
             "showing", () => this._setInOverview(true),
             "hiding",  () => this._setInOverview(false),
-            "hidden",  () => this._updateDelayed(),
+            "hidden",  () => this._updateNow(),
             this);
 
         Main.layoutManager.connectObject(
@@ -181,7 +193,13 @@ export default class PanelColorMatcher extends Extension {
         Main.layoutManager.disconnectObject(this);
         this._settings.disconnectObject(this);
         this._interfaceSettings?.disconnectObject(this);
-        for (const name of ["_updateTimeout", "_pollTimeout", "_dashTimeout", "_accentTimeout"]) {
+        for (const actor of [...this._animating.keys()])
+            this._stopWaitingForEffect(actor, false);
+        if (this._laterId) {
+            global.compositor.get_laters().remove(this._laterId);
+            this._laterId = null;
+        }
+        for (const name of ["_updateTimeout", "_pollTimeout", "_dashTimeout", "_accentTimeout", "_idleId"]) {
             if (this[name]) {
                 GLib.source_remove(this[name]);
                 this[name] = null;
@@ -234,31 +252,61 @@ export default class PanelColorMatcher extends Extension {
         }
     }
 
-    async _captureStage() {
-        // XXX: global.stage.read_pixels would be more appropriate.
-        // https://gitlab.gnome.org/GNOME/mutter/-/issues/3622
+    // Paints just the one pixel at x, y of the stage to a buffer and reads
+    // it back, with no full-stage capture, no wait for the next frame and no
+    // image encoding. This is what GNOME's own color picker uses.
+    // https://github.com/GNOME/gnome-shell/blob/main/src/shell-screenshot.c
+    async _sampleColor(x, y) {
+        // Each pick stores its result in the screenshot object,
+        // so use a new one for every pick.
         const screenshot = new Shell.Screenshot();
-        const [content, scale] = await screenshot.screenshot_stage_to_content();
-        return {texture: content.get_texture(), scale};
+        const [color] = await screenshot.pick_color(x, y);
+        return {r: color.red, g: color.green, b: color.blue};
     }
 
-    async _sampleColor(texture, scale, x, y) {
-        const stream = Gio.MemoryOutputStream.new_resizable();
-        const pixbuf = await Shell.Screenshot.composite_to_stream(
-            texture,
-            x * scale,
-            y * scale,
-            1,
-            1,
-            scale,
-            null,
-            0,
-            0,
-            1,
-            stream,
-        );
-        const pixels = pixbuf.get_pixels();
-        return {r: pixels[0], g: pixels[1], b: pixels[2]};
+    // Sample once the window manager animation of actor is complete,
+    // signalled by signal on actor. The delayed update covers any missed
+    // signal, e.g. when GNOME Shell decides not to animate a window.
+    _waitForEffect(actor, signal) {
+        this._updateDelayed();
+        if (!St.Settings.get().enable_animations || Main.overview.visible) {
+            this._updateNow();
+            return;
+        }
+        if (this._animating.has(actor)) return;
+        const delay = this._settings.get_int("update-delay");
+        const timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._animating.delete(actor);
+            this._stopWaitingForEffect(actor, true);
+            return GLib.SOURCE_REMOVE;
+        });
+        this._animating.set(actor, timeout);
+        actor.connectObject(signal, () => this._stopWaitingForEffect(actor, true), this);
+    }
+
+    _stopWaitingForEffect(actor, update) {
+        const timeout = this._animating.get(actor);
+        timeout && GLib.source_remove(timeout);
+        this._animating.delete(actor);
+        actor.disconnectObject(this);
+        if (update && this._animating.size === 0) this._updateNow();
+    }
+
+    // Sample right after the next frame, once the window stacking, focus
+    // and geometry changes from the current event are reflected on stage.
+    // Skipped while animations are running, those trigger an update on
+    // completion.
+    _updateNow() {
+        if (this._laterId || this._idleId) return;
+        this._laterId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
+            this._laterId = null;
+            this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._idleId = null;
+                if (this._animating.size === 0) this._update();
+                return GLib.SOURCE_REMOVE;
+            });
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _setInOverview(inOverview) {
@@ -385,10 +433,10 @@ export default class PanelColorMatcher extends Extension {
 
         const serial = ++this._serial;
         this._capturing = true;
-        this._captureStage().then(({texture, scale}) => Promise.all([
-            this._sampleColor(texture, scale, x1, y),
-            this._sampleColor(texture, scale, x2, y),
-        ])).then(([color1, color2]) => {
+        Promise.all([
+            this._sampleColor(x1, y),
+            this._sampleColor(x2, y),
+        ]).then(([color1, color2]) => {
             // Disabled or superseded while capturing.
             if (serial !== this._serial) return;
             // In case one window is half-maximized either on the left or the
