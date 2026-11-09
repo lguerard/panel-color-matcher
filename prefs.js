@@ -19,7 +19,7 @@ export default class PanelColorMatcherPreferences extends ExtensionPreferences {
 
         const row = new Adw.SpinRow({
             title: "Update delay",
-            subtitle: "Milliseconds to wait after a window event before sampling and applying the panel color",
+            subtitle: "Milliseconds after a window event for a second, catch-all update, e.g. after a workspace switch animation",
             adjustment: new Gtk.Adjustment({
                 lower: 0,
                 upper: 2000,

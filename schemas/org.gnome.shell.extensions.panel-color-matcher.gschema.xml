@@ -7,10 +7,13 @@
       <range min="0" max="2000"/>
       <summary>Update delay</summary>
       <description>
-        Delay in milliseconds after a triggering event (focus change,
-        resize, workspace switch) before sampling the color and updating
-        the panel. Lower values react faster but risk sampling colors
-        before window animations have finished and increase CPU usage.
+        The panel color is normally updated on the next frame after a
+        focus change, or as soon as a window animation is complete. This
+        is the delay in milliseconds after a triggering event (focus
+        change, resize, workspace switch) for an additional update that
+        catches what those miss, e.g. a workspace switch animation or an
+        app redrawing late. It's also the longest time to wait for a window
+        animation to complete.
       </description>
     </key>
     <key name="poll-fallback-enabled" type="b">

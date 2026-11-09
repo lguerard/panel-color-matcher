@@ -30,7 +30,7 @@ Activate in the GNOME Extensions app.
 
 ## Known Issues
 
-This extension uses programmatic single-pixel screenshots to sample
+This extension uses GNOME's color picker on single pixels to sample
 colors right below the panel. When that color is different than before,
 it is set directly on the panel, without reloading the shell theme. This
 works, but has some minor problems.
@@ -40,9 +40,9 @@ works, but has some minor problems.
   non-pinned open apps in the dock when restyling. This is a bug in Dash
   to Dock, see micheleg/dash-to-dock#2383 for a description and a fix.
 
-* The color sampling uses more CPU than we'd like. It shouldn't be an
-  issue on any modern multi-core system, but if you have a very
-  low-power system, you might want to avoid this.
+* Sampling repaints two pixels of the screen on every window event. This
+  is cheap, but if you have a very low-power system, keep the periodic
+  refresh fallback disabled.
 
 ## Screenshots
 
