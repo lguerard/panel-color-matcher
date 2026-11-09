@@ -2,30 +2,6 @@
 <schemalist>
   <schema id="org.gnome.shell.extensions.panel-color-matcher"
           path="/org/gnome/shell/extensions/panel-color-matcher/">
-    <key name="update-delay" type="i">
-      <default>500</default>
-      <range min="0" max="2000"/>
-      <summary>Update delay</summary>
-      <description>
-        The panel color is normally updated on the next frame after a
-        focus change, or as soon as a window animation is complete. This
-        is the delay in milliseconds after a triggering event (focus
-        change, resize, workspace switch) for an additional update that
-        catches what those miss, e.g. a workspace switch animation or an
-        app redrawing late. It's also the longest time to wait for a window
-        animation to complete.
-      </description>
-    </key>
-    <key name="poll-fallback-enabled" type="b">
-      <default>false</default>
-      <summary>Periodic fallback refresh</summary>
-      <description>
-        Periodically re-check the color even without a triggering window
-        event, to catch content-only changes (e.g. a web page finishing
-        loading) that don't fire any window-manager signal. This wakes the
-        system every few seconds, which costs some battery life.
-      </description>
-    </key>
     <key name="accent-color-enabled" type="b">
       <default>false</default>
       <summary>Match accent color</summary>
