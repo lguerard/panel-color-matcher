@@ -118,6 +118,12 @@ export default class PanelColorMatcher extends Extension {
         // Window actors with a window manager animation in progress, mapped
         // to a timeout to stop waiting for it, see _waitForEffect().
         this._animating = new Map();
+        // The focused window, watched for title changes, and its actor,
+        // briefly watched for redraws after one, see _onTitleChanged().
+        this._focusWindow = null;
+        this._damagedActor = null;
+        this._damagedId = null;
+        this._damagedTimeout = null;
         // Incremented by each capture and by disable(), so that a capture
         // finishing late can tell it has been superseded.
         this._serial = 0;
@@ -128,7 +134,10 @@ export default class PanelColorMatcher extends Extension {
         // animation: sample on the next frame.
         // https://mutter.gnome.org/meta/class.Display.html#signals
         global.display.connectObject(
-            "focus-window", () => this._updateNow(),
+            "focus-window", () => {
+                this._watchFocusWindow();
+                this._updateNow();
+            },
             "grab-op-end",  () => this._updateNow(),
             this);
 
@@ -183,6 +192,7 @@ export default class PanelColorMatcher extends Extension {
             this._update();
         }
         this._syncPoll();
+        this._watchFocusWindow();
     }
 
     disable() {
@@ -193,6 +203,7 @@ export default class PanelColorMatcher extends Extension {
         Main.layoutManager.disconnectObject(this);
         this._settings.disconnectObject(this);
         this._interfaceSettings?.disconnectObject(this);
+        this._unwatchFocusWindow();
         for (const actor of [...this._animating.keys()])
             this._stopWaitingForEffect(actor, false);
         if (this._laterId) {
@@ -290,6 +301,58 @@ export default class PanelColorMatcher extends Extension {
         this._animating.delete(actor);
         actor.disconnectObject(this);
         if (update && this._animating.size === 0) this._updateNow();
+    }
+
+    // Switching tabs in a browser or editor changes neither focus nor
+    // geometry, so no window manager signal fires. It does change the
+    // window title though, and so does e.g. a web page finishing loading.
+    _watchFocusWindow() {
+        this._unwatchFocusWindow();
+        this._focusWindow = global.display.focus_window;
+        this._focusWindow?.connectObject(
+            "notify::title", () => this._onTitleChanged(),
+            "unmanaged",     () => this._unwatchFocusWindow(),
+            this);
+    }
+
+    _unwatchFocusWindow() {
+        this._unwatchDamage();
+        this._focusWindow?.disconnectObject(this);
+        this._focusWindow = null;
+    }
+
+    // The app can draw the new content after changing the title, so
+    // besides sampling right away, sample after each redraw of the window
+    // for a moment.
+    _onTitleChanged() {
+        this._updateNow();
+        this._updateDelayed();
+        const actor = this._focusWindow?.get_compositor_private();
+        if (!actor) return;
+        if (actor !== this._damagedActor) {
+            this._unwatchDamage();
+            this._damagedActor = actor;
+            this._damagedId = actor.connect("damaged", () => this._updateNow());
+        }
+        this._damagedTimeout && GLib.source_remove(this._damagedTimeout);
+        const delay = this._settings.get_int("update-delay");
+        this._damagedTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._damagedTimeout = null;
+            this._unwatchDamage();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _unwatchDamage() {
+        if (this._damagedTimeout) {
+            GLib.source_remove(this._damagedTimeout);
+            this._damagedTimeout = null;
+        }
+        if (this._damagedActor) {
+            this._damagedActor.disconnect(this._damagedId);
+            this._damagedActor = null;
+            this._damagedId = null;
+        }
     }
 
     // Sample right after the next frame, once the window stacking, focus
