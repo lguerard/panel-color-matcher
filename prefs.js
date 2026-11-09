@@ -36,6 +36,20 @@ export default class PanelColorMatcherPreferences extends ExtensionPreferences {
         });
         settings.bind("poll-fallback-enabled", pollRow, "active", Gio.SettingsBindFlags.DEFAULT);
         group.add(pollRow);
+
+        const accentRow = new Adw.SwitchRow({
+            title: "Match accent color",
+            subtitle: "Set the system accent color to the preset closest to the panel color. Gray colors keep your own accent color.",
+        });
+        settings.bind("accent-color-enabled", accentRow, "active", Gio.SettingsBindFlags.DEFAULT);
+        // GNOME 46 has no accent color setting.
+        const interfaceSchema = Gio.SettingsSchemaSource.get_default()
+            .lookup("org.gnome.desktop.interface", true);
+        if (!interfaceSchema?.has_key("accent-color")) {
+            accentRow.sensitive = false;
+            accentRow.subtitle = "Requires GNOME 47 or later.";
+        }
+        group.add(accentRow);
     }
 
 }
