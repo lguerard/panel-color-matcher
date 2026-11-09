@@ -1,6 +1,6 @@
 # -*- coding: utf-8-unix -*-
 
-EXTENSION := panel-color-matcher@otsaloma.io
+EXTENSION := panel-color-matcher@lguerard.github.io
 PACK_FILE := $(EXTENSION).shell-extension.zip
 INSTALL_DIR := ~/.local/share/gnome-shell/extensions/$(EXTENSION)
 

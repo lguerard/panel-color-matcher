@@ -1,9 +1,9 @@
 {
   "name": "Panel Color Matcher",
   "description": "Dynamically change the top panel color to match the window below it.",
-  "uuid": "panel-color-matcher@otsaloma.io",
+  "uuid": "panel-color-matcher@lguerard.github.io",
   "shell-version": ["46", "47", "48", "49", "50"],
   "settings-schema": "org.gnome.shell.extensions.panel-color-matcher",
-  "url": "https://github.com/otsaloma/panel-color-matcher",
+  "url": "https://github.com/lguerard/panel-color-matcher",
   "donations": {"paypal": "otsaloma"}
 }
