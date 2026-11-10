@@ -4,7 +4,9 @@ Panel Color Matcher GNOME Shell Extension
 Panel Color Matcher is a GNOME Shell extension to dynamically change the
 top panel color to match the window below it. With no window below the
 panel, e.g. on an empty desktop, the panel stays transparent. If Dash to
-Dock is installed, its background follows the panel color.
+Dock (or Ubuntu Dock) is installed, its background follows the panel color,
+including being transparent with the panel. Your own dock settings are
+restored when a window is below the panel again or the extension is disabled.
 Optionally, on GNOME 47 and later, the system accent color can follow
 the panel color too, using the closest of GNOME's preset accent colors.
 
