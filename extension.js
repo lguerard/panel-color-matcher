@@ -18,6 +18,9 @@ const DASH_SCHEMA = "org.gnome.shell.extensions.dash-to-dock";
 // color changes several times in quick succession.
 const DASH_DELAY = 300;
 
+// Name of the dock's container actor, in both Dash to Dock and Ubuntu Dock.
+const DOCK_NAME = "dashtodockContainer";
+
 // Dash state for _writeDash(), when the panel is transparent.
 const DASH_TRANSPARENT = "transparent";
 
@@ -163,6 +166,14 @@ export default class PanelColorMatcher extends Extension {
             },
             this);
 
+        // Docks created later, e.g. on a monitor change, need the style class
+        // of a transparent dock too.
+        if (this._dashSettings) {
+            Main.uiGroup.connectObject(
+                "child-added", (group, actor) => actor.name === DOCK_NAME && this._syncDockClass(),
+                this);
+        }
+
         // Rather than guessing from window manager events when what's below
         // the panel might have changed, which misses e.g. switching tabs in
         // a browser, watch the stage being repainted there. Whatever the
@@ -189,6 +200,7 @@ export default class PanelColorMatcher extends Extension {
         Main.overview.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
         Main.panel.disconnectObject(this);
+        Main.uiGroup.disconnectObject(this);
         this._settings.disconnectObject(this);
         this._interfaceSettings?.disconnectObject(this);
         for (const name of ["_sampleTimeout", "_dashTimeout", "_accentTimeout"]) {
@@ -435,6 +447,18 @@ export default class PanelColorMatcher extends Extension {
         settings.apply();
         this._dashColor = state;
         if (!state) this._dashOriginal = null;
+        this._syncDockClass();
+    }
+
+    // Give the dock the style class of a transparent panel while it's
+    // transparent, for the shadows in stylesheet.css.
+    _syncDockClass() {
+        const transparent = this._dashColor === DASH_TRANSPARENT;
+        for (const actor of Main.uiGroup.get_children()) {
+            if (actor.name !== DOCK_NAME) continue;
+            if (transparent) actor.add_style_class_name(CLASS_TRANSPARENT);
+            else actor.remove_style_class_name(CLASS_TRANSPARENT);
+        }
     }
 
 }
