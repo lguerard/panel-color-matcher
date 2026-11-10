@@ -18,6 +18,9 @@ const DASH_SCHEMA = "org.gnome.shell.extensions.dash-to-dock";
 // color changes several times in quick succession.
 const DASH_DELAY = 300;
 
+// Dash state for _writeDash(), when the panel is transparent.
+const DASH_TRANSPARENT = "transparent";
+
 // Delay in milliseconds before following a panel color change in the
 // system accent color. Changing the accent color restyles the whole shell
 // and all apps, so only do it once the color has settled.
@@ -376,7 +379,8 @@ export default class PanelColorMatcher extends Extension {
         if (!this._dashSettings || this._dashTimeout) return;
         this._dashTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, DASH_DELAY, () => {
             this._dashTimeout = null;
-            this._writeDash(this._panelColor && toHex(this._panelColor));
+            // Follow the panel: its color, or transparent when it is.
+            this._writeDash(this._panelColor ? toHex(this._panelColor) : DASH_TRANSPARENT);
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -404,23 +408,33 @@ export default class PanelColorMatcher extends Extension {
         if (!name) this._accentOriginal = null;
     }
 
-    // Set the dash color, null to restore the user's own settings.
-    _writeDash(hex) {
-        if (hex === this._dashColor) return;
+    // Set the dash to a color as a hex string, to fully transparent with
+    // DASH_TRANSPARENT, or null to restore the user's own settings.
+    _writeDash(state) {
+        if (state === this._dashColor) return;
         const settings = this._dashSettings;
         if (!this._dashOriginal) {
             this._dashOriginal = {
                 custom: settings.get_boolean("custom-background-color"),
                 color: settings.get_string("background-color"),
+                mode: settings.get_string("transparency-mode"),
+                opacity: settings.get_double("background-opacity"),
             };
         }
-        // Write both keys at once, so Dash to Dock restyles only once.
+        const original = this._dashOriginal;
+        const transparent = state === DASH_TRANSPARENT;
+        const color = state && !transparent;
+        // Write all keys at once, so Dash to Dock restyles only once.
+        // A fixed opacity of zero makes the dash background invisible
+        // whatever its color, in all of Dash to Dock's transparency modes.
         settings.delay();
-        settings.set_boolean("custom-background-color", hex ? true : this._dashOriginal.custom);
-        settings.set_string("background-color", hex ?? this._dashOriginal.color);
+        settings.set_boolean("custom-background-color", color ? true : original.custom);
+        settings.set_string("background-color", color ? state : original.color);
+        settings.set_string("transparency-mode", transparent ? "FIXED" : original.mode);
+        settings.set_double("background-opacity", transparent ? 0 : original.opacity);
         settings.apply();
-        this._dashColor = hex;
-        if (!hex) this._dashOriginal = null;
+        this._dashColor = state;
+        if (!state) this._dashOriginal = null;
     }
 
 }
