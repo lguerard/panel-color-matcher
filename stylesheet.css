@@ -13,6 +13,22 @@
     background-color: transparent;
 }
 
+/*
+ * With nothing behind them, white text and icons can be hard to read on a
+ * bright wallpaper, so add a soft shadow to them, on the panel and on the
+ * dock, which has this class too while it's transparent. text-shadow is
+ * inherited by the labels in a button, but icon-shadow isn't.
+ */
+
+#panel.panel-color-matcher-transparent .panel-button {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+#panel.panel-color-matcher-transparent StIcon,
+#dashtodockContainer.panel-color-matcher-transparent StIcon {
+    icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
 #panel.panel-color-matcher-dark-text * {
     color: rgba(0, 0, 0, 0.9);
 }
